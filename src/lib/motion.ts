@@ -56,3 +56,9 @@ export const BOOST_SPEED = 900
 
 /** How quickly the boost bleeds off into the cruise, in seconds. */
 export const BOOST_DECAY = 0.55
+
+/**
+ * Time constant for coasting to a stop when the record is lifted off. At 0.11s
+ * the platter is effectively still after roughly a third of a second.
+ */
+export const SPINDOWN_DECAY = 0.11

@@ -1,6 +1,6 @@
 import { useAnimationFrame, useMotionValue } from 'framer-motion'
 import { useRef } from 'react'
-import { BOOST_DECAY, BOOST_SPEED, CRUISE_SPEED } from './motion'
+import { BOOST_DECAY, BOOST_SPEED, CRUISE_SPEED, SPINDOWN_DECAY } from './motion'
 
 /**
  * Drives a record's rotation as a continuously integrated angle rather than a
@@ -31,8 +31,11 @@ export function useRecordSpin(spinning: boolean, boostKey: string | null, enable
     const target = spinning ? CRUISE_SPEED : 0
 
     // Exponential approach to the target speed: fast at first, then gentle.
-    const k = 1 - Math.exp(-dt / BOOST_DECAY)
-    speed.current += (target - speed.current) * k
+    // Spinning down is the quicker of the two — a record lifted off the
+    // platter should coast to a stop in a beat, not wind down like it is
+    // still under power.
+    const tau = spinning ? BOOST_DECAY : SPINDOWN_DECAY
+    speed.current += (target - speed.current) * (1 - Math.exp(-dt / tau))
 
     if (speed.current > 0.05) {
       rotation.set((rotation.get() + speed.current * dt) % 360)

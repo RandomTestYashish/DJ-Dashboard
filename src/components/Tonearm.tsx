@@ -1,23 +1,54 @@
-import { motion, useReducedMotion } from 'framer-motion'
+import { motion, useReducedMotion, type Transition } from 'framer-motion'
+import { TONEARM_TIMING, type TonearmState } from '../lib/useTonearmState'
 
 type Props = {
-  /** True once a record is on the platter and turning. */
-  engaged: boolean
+  /** Where the arm is in its lift/return cycle. */
+  state: TonearmState
   /** Diameter of the turntable housing in px. */
   size: number
 }
 
+/** Parked out to the right, clear of the platter. */
+const PARKED = { rotate: 18, x: 12, y: -4 }
+const OVER_RECORD = { rotate: 0, x: 0, y: 0 }
+
+const target = (state: TonearmState) =>
+  state === 'playing' || state === 'returning' ? OVER_RECORD : PARKED
+
 /**
- * A pared-back tonearm hinged at the top right of the housing. It rests lifted
- * and swings in over the record when one starts playing — the mechanical beat
- * that sells the swap as something physical rather than a colour change.
+ * The arm swings out of the way the moment the record leaves the platter, and
+ * comes back down after it. Going out is a plain ease — a cue getting out of
+ * the way. Coming back is a spring damped to overshoot by roughly two degrees,
+ * so it settles onto the record instead of clicking into place.
+ */
+function transitionFor(state: TonearmState, reduced: boolean): Transition {
+  if (reduced) return { duration: 0.001 }
+  if (state === 'lifting') {
+    return { duration: TONEARM_TIMING.lifting / 1000, ease: 'easeOut' }
+  }
+  if (state === 'returning') {
+    return {
+      type: 'spring',
+      stiffness: 120,
+      damping: 12,
+      mass: 1,
+      delay: TONEARM_TIMING.returnDelay / 1000,
+    }
+  }
+  // `resting` and `playing` are where the moving states already left the arm,
+  // so these never actually travel.
+  return { duration: 0.2, ease: 'easeOut' }
+}
+
+/**
+ * A pared-back tonearm hinged at the top right of the housing.
  *
  * The SVG spans the whole housing on a 100×100 viewBox, so every coordinate
  * below is a percentage of the turntable and the arm scales with it exactly.
  * The needle is meant to sit out near the first groove, never over the label.
  */
-export function Tonearm({ engaged, size }: Props) {
-  const reduced = useReducedMotion()
+export function Tonearm({ state, size }: Props) {
+  const reduced = useReducedMotion() ?? false
 
   return (
     <div className="pointer-events-none absolute inset-0" style={{ zIndex: 25 }} aria-hidden="true">
@@ -25,12 +56,14 @@ export function Tonearm({ engaged, size }: Props) {
         viewBox="0 0 100 100"
         fill="none"
         className="h-full w-full overflow-visible"
-        style={{ originX: '0.865', originY: '0.135', filter: `drop-shadow(0 ${size * 0.004}px ${size * 0.012}px rgba(0,0,0,0.16))` }}
+        style={{
+          originX: '0.865',
+          originY: '0.135',
+          filter: `drop-shadow(0 ${size * 0.004}px ${size * 0.012}px rgba(0,0,0,0.16))`,
+        }}
         initial={false}
-        animate={{ rotate: engaged ? 0 : 13 }}
-        transition={
-          reduced ? { duration: 0.001 } : { type: 'spring', stiffness: 120, damping: 18, mass: 1 }
-        }
+        animate={target(state)}
+        transition={transitionFor(state, reduced)}
       >
         <defs>
           <linearGradient id="arm-tube" x1="0" y1="0" x2="1" y2="1">

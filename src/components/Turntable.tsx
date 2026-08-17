@@ -1,6 +1,8 @@
 import { AnimatePresence, motion, type MotionValue } from 'framer-motion'
 import type { FlashKind, Mood } from '../data/moods'
 import { EASE_OUT_QUINT, recordLayoutId, recordSwap, recordSwapReduced } from '../lib/motion'
+import type { TonearmState } from '../lib/useTonearmState'
+import type { useVinylDrag } from '../lib/useVinylDrag'
 import { Tonearm } from './Tonearm'
 import { TurntableBody } from './TurntableBody'
 import { VinylRecord } from './VinylRecord'
@@ -10,8 +12,12 @@ type Props = {
   size: number
   recordSize: number
   rotation: MotionValue<number>
-  /** Bumped once per selection to fire the flash and the ring pulse. */
-  swapCount: number
+  /** Bumped when the mood changes, to fire that mood's flash. */
+  flashKey: number
+  /** Bumped whenever a record lands, including after being placed back. */
+  pulseKey: number
+  drag: ReturnType<typeof useVinylDrag>
+  tonearm: TonearmState
   reduced: boolean
 }
 
@@ -40,9 +46,20 @@ const flashTiming: Record<FlashKind, { peak: number; duration: number }> = {
   glow: { peak: 0.45, duration: 0.9 },
 }
 
-export function Turntable({ mood, size, recordSize, rotation, swapCount, reduced }: Props) {
+export function Turntable({
+  mood,
+  size,
+  recordSize,
+  rotation,
+  flashKey,
+  pulseKey,
+  drag,
+  tonearm,
+  reduced,
+}: Props) {
   const swap = reduced ? recordSwapReduced : recordSwap
   const flash = mood ? flashTiming[mood.flash] : null
+  const held = drag.dragging || drag.position === 'outside'
 
   return (
     <div className="relative" style={{ width: size, height: size }}>
@@ -59,7 +76,7 @@ export function Turntable({ mood, size, recordSize, rotation, swapCount, reduced
         }}
       />
 
-      <TurntableBody size={size}>
+      <TurntableBody size={size} dropHint={drag.dropHint}>
         {/* the platter position — every record that plays lands exactly here */}
         <div
           className="absolute left-1/2 top-1/2"
@@ -70,8 +87,9 @@ export function Turntable({ mood, size, recordSize, rotation, swapCount, reduced
             marginTop: -recordSize / 2,
           }}
         >
-          {/* The blank house record. It does not fly anywhere; it is simply
-              lifted off and put away when a chosen record arrives. */}
+          {/* The blank house record. It does not fly anywhere, and it is not
+              something to pick up; it is simply lifted off and put away when a
+              chosen record arrives. */}
           <AnimatePresence>
             {!mood && (
               <motion.div
@@ -96,26 +114,53 @@ export function Turntable({ mood, size, recordSize, rotation, swapCount, reduced
           </AnimatePresence>
 
           {mood && (
-            <motion.div
+            <motion.button
+              type="button"
               key={mood.id}
               layoutId={recordLayoutId(mood.id)}
-              className="absolute inset-0"
+              aria-label={
+                drag.position === 'inside'
+                  ? `${mood.name} record on the turntable. Press Enter to lift it off.`
+                  : `${mood.name} record lifted off. Press Enter to place it back.`
+              }
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                // Stop the browser turning this into a click, and stop Space
+                // from scrolling the page.
+                event.preventDefault()
+                drag.toggle()
+              }}
+              {...drag.handlers}
+              className="absolute inset-0 block border-0 bg-transparent p-0"
               style={{
                 borderRadius: '50%',
-                boxShadow: `0 ${recordSize * 0.045}px ${recordSize * 0.11}px rgba(0,0,0,0.24)`,
-                zIndex: 20,
+                x: drag.x,
+                y: drag.y,
+                rotate: drag.rotate,
+                scale: drag.scale,
+                touchAction: 'none',
+                userSelect: 'none',
+                cursor: drag.dragging ? 'grabbing' : 'grab',
+                // Above the tonearm once in hand, so the record is never
+                // dragged out from under it.
+                zIndex: held ? 40 : 20,
+              }}
+              animate={{
+                boxShadow: held
+                  ? '0 18px 35px rgba(0,0,0,0.18), 0 5px 12px rgba(0,0,0,0.10)'
+                  : `0 ${recordSize * 0.045}px ${recordSize * 0.11}px rgba(0,0,0,0.24)`,
               }}
               transition={swap}
             >
               <VinylRecord mood={mood} size={recordSize} rotation={rotation} />
-            </motion.div>
+            </motion.button>
           )}
 
           {/* a ring that blooms outward once, right after a record lands */}
           <AnimatePresence>
             {mood && !reduced && (
               <motion.span
-                key={`pulse-${swapCount}`}
+                key={`pulse-${pulseKey}`}
                 className="pointer-events-none absolute inset-0"
                 style={{ borderRadius: '50%', zIndex: 22 }}
                 initial={{ opacity: 0.55, scale: 1, boxShadow: `0 0 0 0px ${mood.accent}` }}
@@ -135,7 +180,7 @@ export function Turntable({ mood, size, recordSize, rotation, swapCount, reduced
         <AnimatePresence>
           {mood && flash && !reduced && (
             <motion.div
-              key={`flash-${swapCount}`}
+              key={`flash-${flashKey}`}
               className="pointer-events-none absolute inset-0"
               style={{
                 borderRadius: size * 0.0875,
@@ -151,7 +196,7 @@ export function Turntable({ mood, size, recordSize, rotation, swapCount, reduced
           )}
         </AnimatePresence>
 
-        <Tonearm engaged={mood !== null} size={size} />
+        <Tonearm state={tonearm} size={size} />
       </TurntableBody>
     </div>
   )
