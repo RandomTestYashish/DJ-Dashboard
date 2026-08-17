@@ -1,56 +1,69 @@
-import { motion, useMotionValue, useReducedMotion, useSpring } from 'framer-motion'
+import { animate, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ConversationHeader } from './components/ConversationHeader'
-import { MoodSelector } from './components/MoodSelector'
+import { DraggableVinyl } from './components/DraggableVinyl'
+import { Player } from './components/Player'
 import { SelectedMoodIndicator } from './components/SelectedMoodIndicator'
-import { Turntable } from './components/Turntable'
+import { VinylCollection } from './components/VinylCollection'
 import { MOODS, type Mood } from './data/moods'
 import { playClick } from './lib/audio'
-import { useMediaQuery } from './lib/useMediaQuery'
+import { playerLayout } from './lib/playerLayout'
 import { useRecordSpin } from './lib/useRecordSpin'
+import { useStageGeometry } from './lib/useStageGeometry'
 import { useTonearmState } from './lib/useTonearmState'
-import { useVinylDrag } from './lib/useVinylDrag'
+import { useViewportWidth } from './lib/useViewportWidth'
+import { useVinylStage } from './lib/useVinylStage'
+import { useVinylMotion } from './lib/vinylMotion'
 
-/** Furthest the turntable leans toward the pointer, in px. */
-const PARALLAX = 3
+/** The settle as a record beds down — a little overshoot, no bounce. */
+const SNAP = { type: 'spring' as const, stiffness: 320, damping: 25, mass: 0.8 }
 
-/** After a record is placed back, the beat before the platter drives it. */
+/** After a record lands, the beat before the platter drives it. */
 const SPIN_UP_DELAY = 700
-/** ...and the beat before the highlight sweeps across it. */
-const LAND_PULSE_DELAY = 800
 
 export default function App() {
   const reduced = useReducedMotion() ?? false
-  const compact = useMediaQuery('(max-width: 420px)')
-
-  const [selected, setSelected] = useState<Mood | null>(null)
-  const [flashKey, setFlashKey] = useState(0)
-  const [pulseKey, setPulseKey] = useState(0)
-
-  const turntableSize = compact ? 270 : 320
-  const recordSize = Math.round(turntableSize * 0.78)
-  const miniSize = compact ? 60 : 68
+  const viewport = useViewportWidth()
+  const layout = playerLayout(viewport)
 
   const stageRef = useRef<HTMLDivElement>(null)
+  const platterRef = useRef<HTMLDivElement>(null)
+  const { geometry, registerSlot } = useStageGeometry(stageRef, platterRef)
+  const motionFor = useVinylMotion()
 
-  const drag = useVinylDrag({
-    // The record counts as seated only while its centre is over the recess.
-    playableRadius: turntableSize * 0.42,
-    recordSize,
-    outOffset: { x: -turntableSize * 0.3, y: -turntableSize * 0.4 },
-    stage: stageRef,
-    enabled: selected !== null,
+  const [landings, setLandings] = useState(0)
+
+  const onDrop = useCallback(() => {
+    setLandings((n) => n + 1)
+    playClick()
+  }, [])
+
+  // Wrapped rather than passed straight through: the callbacks are handed a
+  // Mood, and playClick's only argument is a volume.
+  const onPickUp = useCallback(() => playClick(), [])
+
+  const stage = useVinylStage({
+    moods: MOODS,
+    geometry,
+    recordSize: layout.vinylSize,
+    motionFor,
     reduced,
+    onDrop,
+    onPickUp,
   })
 
-  const seated = selected !== null && drag.position === 'inside'
-  const tonearm = useTonearmState(seated, reduced)
+  const { placements, activeVinyl, draggedVinyl, isDragging, isOverPlatter } = stage
 
-  // The platter waits a beat after the record is back down before it drives
-  // it, so the arm has time to come to rest first.
-  const [driven, setDriven] = useState(true)
+  // The arm is down whenever there is a record under it, and comes back the
+  // moment one is carried over the platter — while still in hand, not after.
+  const armEngaged = activeVinyl !== null || (isDragging && isOverPlatter)
+  const tonearm = useTonearmState(armEngaged, reduced)
+
+  // The platter waits a beat after a record lands before driving it, so the
+  // arm has time to come to rest first.
+  const [driven, setDriven] = useState(false)
   useEffect(() => {
-    if (!seated) {
+    if (!activeVinyl) {
       setDriven(false)
       return
     }
@@ -58,98 +71,109 @@ export default function App() {
       setDriven(true)
       return
     }
-    const spinUp = setTimeout(() => setDriven(true), SPIN_UP_DELAY)
-    const sweep = setTimeout(() => setPulseKey((n) => n + 1), LAND_PULSE_DELAY)
-    return () => {
-      clearTimeout(spinUp)
-      clearTimeout(sweep)
+    const timer = setTimeout(() => setDriven(true), SPIN_UP_DELAY)
+    return () => clearTimeout(timer)
+  }, [activeVinyl, reduced, landings])
+
+  const rotation = useRecordSpin(activeVinyl !== null && driven, activeVinyl?.id ?? null, !reduced)
+
+  // Records animate to wherever their placement says they belong. The one in
+  // hand is skipped — the pointer is driving it.
+  const hydrated = useRef(false)
+  useEffect(() => {
+    if (!geometry.platter.r) return
+    const instant = reduced || !hydrated.current
+    hydrated.current = true
+
+    for (const mood of MOODS) {
+      if (draggedVinyl?.id === mood.id) continue
+      const values = motionFor(mood.id)
+      const point = stage.restingPoint(mood.id)
+      const scale =
+        placements[mood.id]?.kind === 'collection'
+          ? layout.collectionSize / layout.vinylSize
+          : 1
+
+      if (instant) {
+        values.x.set(point.x)
+        values.y.set(point.y)
+        values.scale.set(scale)
+        values.rotate.set(0)
+        continue
+      }
+      animate(values.x, point.x, SNAP)
+      animate(values.y, point.y, SNAP)
+      animate(values.scale, scale, SNAP)
+      animate(values.rotate, 0, { duration: 0.35, ease: [0.22, 1, 0.36, 1] })
     }
-  }, [seated, reduced])
+    // `stage.restingPoint` closes over placements and geometry, both listed.
+  }, [placements, geometry, layout, draggedVinyl, reduced, motionFor, stage])
 
-  const rotation = useRecordSpin(seated && driven, selected?.id ?? null, !reduced)
-
-  const select = useCallback(
-    (mood: Mood) => {
-      // Re-picking the record already playing would fly it out and back for no
-      // reason, so treat it as a no-op.
-      if (mood.id === selected?.id) return
-      // A new record always arrives seated, however the last one was left.
-      drag.reset()
-      setSelected(mood)
-      setFlashKey((n) => n + 1)
-      setPulseKey((n) => n + 1)
-      playClick()
+  const onPointerDown = useCallback(
+    (mood: Mood, event: React.PointerEvent<HTMLElement>) => {
+      stage.beginDrag(mood, event, stageRef.current)
     },
-    [selected?.id, drag],
+    [stage],
   )
 
-  // ---- pointer parallax on the housing ----
-  const rawX = useMotionValue(0)
-  const rawY = useMotionValue(0)
-  const tiltX = useSpring(rawX, { stiffness: 140, damping: 20 })
-  const tiltY = useSpring(rawY, { stiffness: 140, damping: 20 })
+  const resting = MOODS.filter((m) => m.id !== draggedVinyl?.id)
 
-  const handlePointerMove = (event: React.PointerEvent) => {
-    // While a record is in hand the housing holds still — two things moving
-    // with the pointer at once reads as drift, not depth.
-    if (reduced || drag.dragging || event.pointerType !== 'mouse') return
-    const box = stageRef.current?.getBoundingClientRect()
-    if (!box) return
-    const dx = (event.clientX - (box.left + box.width / 2)) / (box.width / 2)
-    const dy = (event.clientY - (box.top + box.height / 2)) / (box.height / 2)
-    rawX.set(Math.max(-1, Math.min(1, dx)) * PARALLAX)
-    rawY.set(Math.max(-1, Math.min(1, dy)) * PARALLAX)
-  }
-
-  const resetParallax = () => {
-    rawX.set(0)
-    rawY.set(0)
-  }
+  const renderVinyl = (mood: Mood) => (
+    <DraggableVinyl
+      key={mood.id}
+      mood={mood}
+      size={layout.vinylSize}
+      motionValues={motionFor(mood.id)}
+      placement={placements[mood.id] ?? { kind: 'collection' }}
+      dragging={draggedVinyl?.id === mood.id}
+      rotation={activeVinyl?.id === mood.id ? rotation : undefined}
+      onPointerDown={onPointerDown}
+      onToggle={stage.toggle}
+    />
+  )
 
   return (
     <main
       ref={stageRef}
-      onPointerMove={handlePointerMove}
-      onPointerLeave={resetParallax}
-      /* `overflow-x: clip` keeps the turntable's halo from widening the page on
-         narrow screens without turning this into a scroll container. */
-      className="mx-auto flex min-h-[100svh] w-full max-w-[900px] flex-col items-center justify-center gap-7 overflow-x-clip px-5 py-8 sm:gap-9"
+      /* `overflow-x: clip` keeps a record carried to the edge from widening
+         the page, without turning this into a scroll container. */
+      className="relative mx-auto flex min-h-[100svh] w-full max-w-[900px] flex-col items-center justify-center gap-7 overflow-x-clip px-4 py-8 sm:gap-9"
     >
-      <div className="relative z-0 w-full max-w-[420px]">
+      <div className="w-full max-w-[420px]">
         <ConversationHeader />
       </div>
 
-      {/* Sits above the rest of the stage so a lifted record passes over the
-          caption and the crate rather than behind them. */}
-      <motion.div
-        className="relative z-20"
-        style={reduced ? undefined : { x: tiltX, y: tiltY }}
-      >
-        <Turntable
-          mood={selected}
-          size={turntableSize}
-          recordSize={recordSize}
-          rotation={rotation}
-          flashKey={flashKey}
-          pulseKey={pulseKey}
-          drag={drag}
-          tonearm={tonearm}
-          reduced={reduced}
-        />
-      </motion.div>
+      <Player
+        layout={layout}
+        platterRef={platterRef}
+        isOverPlatter={isOverPlatter}
+        tonearm={tonearm}
+        reduced={reduced}
+      />
 
-      <div className="relative z-10">
-        <SelectedMoodIndicator mood={selected} seated={seated} reduced={reduced} />
+      <SelectedMoodIndicator
+        mood={activeVinyl}
+        held={draggedVinyl}
+        overPlatter={isOverPlatter}
+        reduced={reduced}
+      />
+
+      <VinylCollection
+        moods={MOODS}
+        placements={placements}
+        size={layout.collectionSize}
+        registerSlot={registerSlot}
+      />
+
+      {/* Records at rest sit below the tonearm, so the arm lies over the one on
+          the platter. */}
+      <div className="pointer-events-none absolute inset-0" style={{ zIndex: 10 }}>
+        {resting.map(renderVinyl)}
       </div>
 
-      <div className="relative z-0">
-        <MoodSelector
-          moods={MOODS}
-          selectedId={selected?.id ?? null}
-          size={miniSize}
-          onSelect={select}
-          reduced={reduced}
-        />
+      {/* The record in hand rides above the arm — you are holding it. */}
+      <div className="pointer-events-none absolute inset-0" style={{ zIndex: 30 }}>
+        {draggedVinyl && renderVinyl(draggedVinyl)}
       </div>
     </main>
   )

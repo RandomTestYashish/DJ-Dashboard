@@ -1,31 +1,27 @@
 import { motion, useReducedMotion, type Transition } from 'framer-motion'
+import type { PlayerLayout } from '../lib/playerLayout'
 import { TONEARM_TIMING, type TonearmState } from '../lib/useTonearmState'
 
 type Props = {
-  /** Where the arm is in its lift/return cycle. */
   state: TonearmState
-  /** Diameter of the turntable housing in px. */
-  size: number
+  layout: PlayerLayout
 }
 
-/** Parked out to the right, clear of the platter. */
-const PARKED = { rotate: 18, x: 12, y: -4 }
+/** Swung off the record, to its rest at the right of the deck. */
+const PARKED = { rotate: -36, x: 4, y: -3 }
 const OVER_RECORD = { rotate: 0, x: 0, y: 0 }
 
 const target = (state: TonearmState) =>
   state === 'playing' || state === 'returning' ? OVER_RECORD : PARKED
 
 /**
- * The arm swings out of the way the moment the record leaves the platter, and
- * comes back down after it. Going out is a plain ease — a cue getting out of
- * the way. Coming back is a spring damped to overshoot by roughly two degrees,
- * so it settles onto the record instead of clicking into place.
+ * Going out is a plain ease — a cue getting out of the way. Coming back is a
+ * spring damped to overshoot by roughly two degrees, so the stylus settles
+ * onto the record instead of clicking into place.
  */
 function transitionFor(state: TonearmState, reduced: boolean): Transition {
   if (reduced) return { duration: 0.001 }
-  if (state === 'lifting') {
-    return { duration: TONEARM_TIMING.lifting / 1000, ease: 'easeOut' }
-  }
+  if (state === 'lifting') return { duration: TONEARM_TIMING.lifting / 1000, ease: 'easeOut' }
   if (state === 'returning') {
     return {
       type: 'spring',
@@ -35,105 +31,160 @@ function transitionFor(state: TonearmState, reduced: boolean): Transition {
       delay: TONEARM_TIMING.returnDelay / 1000,
     }
   }
-  // `resting` and `playing` are where the moving states already left the arm,
-  // so these never actually travel.
   return { duration: 0.2, ease: 'easeOut' }
 }
 
 /**
- * A pared-back tonearm hinged at the top right of the housing.
- *
- * The SVG spans the whole housing on a 100×100 viewBox, so every coordinate
- * below is a percentage of the turntable and the arm scales with it exactly.
- * The needle is meant to sit out near the first groove, never over the label.
+ * A machined copper tonearm pivoting at the right of the deck. Drawn in the
+ * deck's own pixel space so the pivot, the arm and the headshell keep their
+ * proportions at any player size.
  */
-export function Tonearm({ state, size }: Props) {
+export function Tonearm({ state, layout }: Props) {
   const reduced = useReducedMotion() ?? false
+  const { width, deckHeight, armBaseX, armBaseY, armTipX, armTipY, platterSize } = layout
+
+  // Scale the hardware to the player so it never looks pasted on.
+  const tube = Math.max(2, platterSize * 0.016)
+  const pivot = Math.max(3.6, platterSize * 0.034)
+  const plinth = Math.max(6, platterSize * 0.062)
+  const head = Math.max(8, platterSize * 0.085)
+
+  const angle = (Math.atan2(armTipY - armBaseY, armTipX - armBaseX) * 180) / Math.PI
 
   return (
-    <div className="pointer-events-none absolute inset-0" style={{ zIndex: 25 }} aria-hidden="true">
-      <motion.svg
-        viewBox="0 0 100 100"
-        fill="none"
-        className="h-full w-full overflow-visible"
+    <motion.svg
+      className="pointer-events-none absolute left-0 top-0 overflow-visible"
+      width={width}
+      height={deckHeight}
+      viewBox={`0 0 ${width} ${deckHeight}`}
+      fill="none"
+      aria-hidden="true"
+      style={{ originX: `${armBaseX}px`, originY: `${armBaseY}px`, zIndex: 20 }}
+      initial={false}
+      animate={target(state)}
+      transition={transitionFor(state, reduced)}
+    >
+      <defs>
+        <linearGradient id="copper" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#E3A071" />
+          <stop offset="45%" stopColor="#B8623B" />
+          <stop offset="100%" stopColor="#9D5431" />
+        </linearGradient>
+        <linearGradient id="copper-pivot" x1="0.2" y1="0" x2="0.9" y2="1">
+          <stop offset="0%" stopColor="#F0BE97" />
+          <stop offset="50%" stopColor="#C0703F" />
+          <stop offset="100%" stopColor="#8C4526" />
+        </linearGradient>
+        <radialGradient id="plinth" cx="0.36" cy="0.3" r="0.75">
+          <stop offset="0%" stopColor="#FBFAF7" />
+          <stop offset="65%" stopColor="#EBEAE5" />
+          <stop offset="100%" stopColor="#D6D5D0" />
+        </radialGradient>
+      </defs>
+
+      <g
         style={{
-          originX: '0.865',
-          originY: '0.135',
-          filter: `drop-shadow(0 ${size * 0.004}px ${size * 0.012}px rgba(0,0,0,0.16))`,
+          filter: `drop-shadow(0 ${platterSize * 0.012}px ${platterSize * 0.03}px rgba(0,0,0,0.30))`,
         }}
-        initial={false}
-        animate={target(state)}
-        transition={transitionFor(state, reduced)}
       >
-        <defs>
-          <linearGradient id="arm-tube" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#FCFCFB" />
-            <stop offset="48%" stopColor="#E1E1DC" />
-            <stop offset="100%" stopColor="#BFBFB8" />
-          </linearGradient>
-          <linearGradient id="arm-pivot" x1="0.2" y1="0" x2="0.9" y2="1">
-            <stop offset="0%" stopColor="#FFFFFF" />
-            <stop offset="55%" stopColor="#E6E6E1" />
-            <stop offset="100%" stopColor="#C4C4BD" />
-          </linearGradient>
-        </defs>
-
-        {/* Counterweight, carried on the stub of tube behind the pivot and so
-            aligned to the same 135° axis as the arm itself. */}
-        <path d="M86.5 13.5 90.2 9.8" stroke="url(#arm-tube)" strokeWidth="1" strokeLinecap="round" />
-        <rect
-          x="88.4"
-          y="7.1"
-          width="4.8"
-          height="2.8"
-          rx="1.4"
-          fill="url(#arm-tube)"
-          stroke="rgba(0,0,0,0.09)"
-          strokeWidth="0.3"
-          transform="rotate(-45 90.8 8.5)"
+        {/* The mounting plinth the arm turns on. Centred on the pivot, so the
+            rotation leaves it looking bolted to the deck. */}
+        <circle
+          cx={armBaseX}
+          cy={armBaseY}
+          r={plinth}
+          fill="url(#plinth)"
+          stroke="rgba(0,0,0,0.10)"
+          strokeWidth="0.8"
+        />
+        <circle
+          cx={armBaseX}
+          cy={armBaseY}
+          r={plinth * 0.78}
+          fill="none"
+          stroke="rgba(0,0,0,0.07)"
+          strokeWidth="0.8"
         />
 
-        {/* the arm tube, reaching down-left to the record's outer groove */}
-        <path
-          d="M85.7 14.3 69.5 30.4"
-          stroke="url(#arm-tube)"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-        />
-        <path
-          d="M85.4 13.7 69.2 29.8"
-          stroke="rgba(255,255,255,0.85)"
-          strokeWidth="0.35"
-          strokeLinecap="round"
-        />
-
-        {/* headshell and stylus, square to the groove it rides */}
-        <g transform="rotate(-45 68.6 31.4)">
-          <rect
-            x="65.2"
-            y="29.9"
-            width="6.6"
-            height="3"
-            rx="1.2"
-            fill="url(#arm-pivot)"
-            stroke="rgba(0,0,0,0.11)"
-            strokeWidth="0.3"
+        {/* counterweight, on the stub behind the pivot */}
+        <g transform={`rotate(${angle} ${armBaseX} ${armBaseY})`}>
+          <line
+            x1={armBaseX}
+            y1={armBaseY}
+            x2={armBaseX + plinth * 1.5}
+            y2={armBaseY}
+            stroke="url(#copper)"
+            strokeWidth={tube * 0.8}
+            strokeLinecap="round"
           />
-          <path d="M67.5 32.9 68.2 34.8" stroke="#96968F" strokeWidth="0.6" strokeLinecap="round" />
+          <rect
+            x={armBaseX + plinth * 1.15}
+            y={armBaseY - tube * 1.5}
+            width={tube * 3.2}
+            height={tube * 3}
+            rx={tube * 1.1}
+            fill="url(#copper-pivot)"
+          />
         </g>
 
-        {/* pivot housing */}
-        <circle
-          cx="86.5"
-          cy="13.5"
-          r="2.5"
-          fill="url(#arm-pivot)"
-          stroke="rgba(0,0,0,0.09)"
-          strokeWidth="0.3"
+        {/* the arm tube */}
+        <line
+          x1={armBaseX}
+          y1={armBaseY}
+          x2={armTipX}
+          y2={armTipY}
+          stroke="url(#copper)"
+          strokeWidth={tube}
+          strokeLinecap="round"
         />
-        <circle cx="86.5" cy="13.5" r="0.85" fill="#D2D2CC" />
-        <circle cx="85.8" cy="12.8" r="0.42" fill="rgba(255,255,255,0.95)" />
-      </motion.svg>
-    </div>
+        {/* a lit edge along the top of the tube */}
+        <line
+          x1={armBaseX}
+          y1={armBaseY - tube * 0.26}
+          x2={armTipX}
+          y2={armTipY - tube * 0.26}
+          stroke="rgba(255,225,200,0.55)"
+          strokeWidth={tube * 0.22}
+          strokeLinecap="round"
+        />
+
+        {/* headshell and stylus */}
+        <g transform={`rotate(${angle} ${armTipX} ${armTipY})`}>
+          <rect
+            x={armTipX - head * 0.55}
+            y={armTipY - head * 0.34}
+            width={head * 1.25}
+            height={head * 0.68}
+            rx={head * 0.18}
+            fill="url(#copper-pivot)"
+          />
+          <rect
+            x={armTipX - head * 0.45}
+            y={armTipY - head * 0.24}
+            width={head * 1.05}
+            height={head * 0.16}
+            rx={head * 0.08}
+            fill="rgba(255,228,205,0.5)"
+          />
+          <path
+            d={`M ${armTipX + head * 0.4} ${armTipY + head * 0.34}
+                L ${armTipX + head * 0.52} ${armTipY + head * 0.78}`}
+            stroke="#6E6E68"
+            strokeWidth={Math.max(1, tube * 0.32)}
+            strokeLinecap="round"
+          />
+        </g>
+
+        {/* pivot post */}
+        <circle cx={armBaseX} cy={armBaseY} r={pivot} fill="url(#copper-pivot)" />
+        <circle cx={armBaseX} cy={armBaseY} r={pivot * 0.42} fill="rgba(90,44,24,0.55)" />
+        <circle
+          cx={armBaseX - pivot * 0.3}
+          cy={armBaseY - pivot * 0.32}
+          r={pivot * 0.18}
+          fill="rgba(255,236,220,0.9)"
+        />
+      </g>
+    </motion.svg>
   )
 }
