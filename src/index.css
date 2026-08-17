@@ -1,10 +1,12 @@
-/* Latin subsets only — the interface has no other scripts, and the fonts are
-   bundled rather than fetched so the page never depends on a font CDN. */
-@import '@fontsource/inter/latin-400.css';
-@import '@fontsource/inter/latin-500.css';
-@import '@fontsource/inter/latin-600.css';
-@import '@fontsource-variable/caveat';
 @import 'tailwindcss';
+
+/* The font stylesheets are imported from main.tsx, not with `@import` here.
+   Pulled in through CSS they arrive via postcss-import, which leaves their
+   `url(./files/...)` references untouched — the dev server resolves them off
+   node_modules and it looks fine, but the production build emits no font
+   files at all and both faces silently fall back. Imported from JS, each
+   stylesheet is its own module and Vite rewrites the URLs and emits the
+   woff2s. */
 
 @theme {
   --font-sans:
